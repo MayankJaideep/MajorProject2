@@ -1,0 +1,293 @@
+/* ========================================
+   BLUE HERO DESIGN - Enhanced Version
+   Based on user reference with improved targeting
+   ======================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* ---------- Layout resets ---------- */
+body,
+.css-1d391kg,
+.css-1wy0on6 {
+    background: none !important;
+}
+
+/* Hide the left sidebar visually */
+div[data-testid="stSidebar"] {
+    display: none !important;
+}
+
+/* Ensure main content uses full width */
+main[role="main"],
+.appview-container .block-container {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+/* Hide Streamlit branding */
+#MainMenu,
+footer,
+header[data-testid="stHeader"] {
+    visibility: hidden;
+    height: 0;
+}
+
+/* ---------- Hero background ---------- */
+#custom-hero {
+    width: 100%;
+    min-height: 520px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    padding: 80px 20px;
+    box-sizing: border-box;
+    color: #fff;
+    position: relative;
+    background: radial-gradient(ellipse at center, rgba(36, 55, 88, 0.95) 0%, rgba(8, 16, 28, 1) 100%) fixed;
+}
+
+#custom-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+    background-size: 14px 14px;
+    opacity: 0.06;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Remove Streamlit's internal dark rectangle */
+.css-1d391kg,
+.css-1q3f6vf,
+.main {
+    background: transparent !important;
+}
+
+/* ---------- Headline ---------- */
+.hero-headline {
+    z-index: 1;
+    text-align: center;
+    max-width: 980px;
+    margin-bottom: 24px;
+}
+
+.hero-headline .h1 {
+    font-weight: 800;
+    font-size: clamp(30px, 5.2vw, 68px);
+    color: #9fb0ff;
+    line-height: 1;
+    margin: 0;
+}
+
+.hero-headline .h2 {
+    font-weight: 900;
+    font-size: clamp(30px, 6vw, 72px);
+    color: #ffffff;
+    margin-top: 8px;
+}
+
+/* ---------- Floating white card ---------- */
+#floating-search-card {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 28px;
+    width: min(1100px, 92%);
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 12px 16px;
+    box-shadow: 0 10px 40px rgba(8, 16, 30, 0.6);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 9999;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* Left side: plus icon & web-search pill */
+#floating-search-card .left {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    min-width: 150px;
+    padding-left: 6px;
+}
+
+#floating-search-card .plus {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #f4f7fb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(12, 18, 30, 0.06);
+}
+
+#floating-search-card .pill {
+    background: #fbfdff;
+    border-radius: 18px;
+    padding: 8px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: inset 0 0 0 1px rgba(10, 20, 30, 0.02);
+    color: #6b7280;
+}
+
+/* Center input area */
+#floating-search-card .center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+}
+
+/* Right side: mic + generate */
+#floating-search-card .mic {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(10, 20, 30, 0.04);
+}
+
+#floating-search-card .generate {
+    background: linear-gradient(90deg, #64a0ff, #3b6ef3);
+    color: white;
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-weight: 700;
+    box-shadow: 0 8px 22px rgba(59, 110, 243, 0.18);
+    border: none;
+}
+
+/* ---------- Style Streamlit chat input ---------- */
+.stChatInputContainer {
+    position: fixed !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    bottom: 34px !important;
+    width: calc(min(1100px, 92%) - 280px) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    z-index: 10000 !important;
+    padding: 0 !important;
+}
+
+.stChatInputContainer textarea {
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    color: #0b1220 !important;
+    font-size: 16px !important;
+    padding-left: 20px !important;
+    height: 44px !important;
+    resize: none !important;
+    box-shadow: none !important;
+}
+
+.stChatInputContainer textarea::placeholder {
+    color: rgba(11, 18, 32, 0.42) !important;
+}
+
+/* Hide the send button or style it minimally */
+.stChatInputContainer button {
+    display: none !important;
+}
+
+/* ---------- Chat messages styling ---------- */
+.stChatMessage {
+    background-color: rgba(30, 41, 59, 0.5);
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stChatMessage .stMarkdown {
+    color: #dfe9ff;
+}
+
+/* Answer and source cards */
+.answer-card,
+.source-card {
+    background: rgba(30, 41, 59, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-top: 1rem;
+    color: #dfe9ff;
+}
+
+.answer-title {
+    color: #9fb0ff;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+}
+
+.source-card:hover {
+    border-color: #64a0ff;
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.source-type {
+    color: #64a0ff;
+    font-weight: 600;
+}
+
+.source-query {
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+}
+
+/* Logo strip */
+.logo-strip {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    margin-top: 3rem;
+    opacity: 0.4;
+    filter: grayscale(100%);
+}
+
+/* Footer */
+.premium-footer {
+    text-align: center;
+    padding: 2rem 0;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.875rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    margin-top: 3rem;
+}
+
+/* Responsiveness */
+@media (max-width: 720px) {
+    #custom-hero {
+        padding: 40px 18px;
+        min-height: 420px;
+    }
+
+    #floating-search-card {
+        width: 96%;
+        bottom: 16px;
+        padding: 10px;
+        border-radius: 12px;
+    }
+
+    .stChatInputContainer {
+        width: calc(96% - 140px) !important;
+        bottom: 20px !important;
+    }
+}

@@ -1,0 +1,35 @@
+langchain
+python-dotenv
+ipykernel
+langchain-community
+pypdf
+pymupdf
+wikipedia
+langchain-text-splitters
+langchain-openai
+chromadb
+sentence_transformers
+langchain_huggingface
+faiss-cpu
+langchain_chroma
+langchain-groq
+streamlit
+google-generativeai
+streamlit_option_menu
+pypdf2
+langgraph
+scikit-learn
+pandas
+numpy
+joblib
+plotly
+
+# ML & NLP Models
+transformers
+torch
+sentencepiece
+
+# ML & Advanced Models
+xgboost>=2.0.0
+lightgbm>=4.0.0
+imbalanced-learn>=0.11.0
