@@ -1,6 +1,6 @@
 """
 BERT-based Feature Extractor for Legal Text.
-Uses 'all-MiniLM-L6-v2' to generate dense vector embeddings that capture semantic meaning.
+Uses 'law-ai/InLegalBERT' (768d) to generate dense vector embeddings that capture semantic meaning.
 """
 
 import numpy as np
@@ -20,30 +20,47 @@ except ImportError:
 class BERTFeatureExtractor:
     """Extracts semantic embeddings using a pre-trained Transformer model"""
     
-    def __init__(self, model_name='all-MiniLM-L6-v2'):
-        """Initialize with a specific model (default: fast & efficient)"""
+    def __init__(self, model_name='law-ai/InLegalBERT'):
+        """
+        Initialize with a specific model.
+        Default: 'law-ai/InLegalBERT' (State-of-the-art for Indian Law)
+        """
         self.model = None
+        self.embedding_dim = 768 # InLegalBERT is 768d
+        
         if SENTENCE_TRANSFORMERS_AVAILABLE:
             try:
-                logger.info(f"Loading SentenceTransformer model: {model_name}...")
+                logger.info(f"🔄 Loading SentenceTransformer model: {model_name}...")
                 self.model = SentenceTransformer(model_name)
                 logger.info("✅ Model loaded successfully.")
+                
+                # Verify dimension
+                test_emb = self.model.encode("test")
+                self.embedding_dim = len(test_emb)
+                logger.info(f"ℹ️ Embedding Dimension: {self.embedding_dim}")
+                
             except Exception as e:
-                logger.error(f"Failed to load model: {e}")
+                logger.error(f"❌ Failed to load model: {e}")
+                logger.info("Falling back to standard 'all-MiniLM-L6-v2'...")
+                try:
+                    self.model = SentenceTransformer('all-MiniLM-L6-v2')
+                    self.embedding_dim = 384
+                except:
+                    pass
     
     def get_text_embedding(self, text: str) -> np.ndarray:
         """
-        Generate 384-dimensional embedding for the input text.
+        Generate embedding for the input text.
         
         Args:
             text: Case description or summary.
             
         Returns:
-            numpy array of shape (384,)
+            numpy array of shape (768,) or (384,) depending on model.
         """
         if not self.model:
             # Return zero vector if model is missing (fallback)
-            return np.zeros(384)
+            return np.zeros(self.embedding_dim)
             
         try:
             # Encode text (convert to numpy automatically)
@@ -51,7 +68,7 @@ class BERTFeatureExtractor:
             return embedding
         except Exception as e:
             logger.error(f"Error encoding text: {e}")
-            return np.zeros(384)
+            return np.zeros(self.embedding_dim)
 
 # Singleton instance for easy import
 bert_extractor = BERTFeatureExtractor()

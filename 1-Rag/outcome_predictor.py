@@ -30,11 +30,21 @@ class OutcomePredictor:
         self.bert_extractor = None
         
         # Locate model dir
-        if not os.path.exists(model_dir):
-            if os.path.exists(os.path.join('1-Rag', model_dir)):
-                self.model_dir = os.path.join('1-Rag', model_dir)
-            elif os.path.exists(os.path.join('..', model_dir)):
-                self.model_dir = os.path.join('..', model_dir)
+        # Robustly locate model dir relative to this script
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Check potential locations
+        potential_paths = [
+            os.path.join(current_dir, 'models'),          # 1-Rag/models
+            os.path.join(current_dir, '..', 'models'),    # Root/models
+            model_dir                                     # As passed
+        ]
+        
+        for path in potential_paths:
+            if os.path.exists(path) and os.path.exists(os.path.join(path, 'stacking_model.pkl')):
+                self.model_dir = path
+                print(f"✅ Found Model Directory: {self.model_dir}")
+                break
 
     def load_model(self):
         """Load trained model components"""
@@ -51,8 +61,9 @@ class OutcomePredictor:
             self.outcome_encoder = joblib.load(os.path.join(self.model_dir, 'outcome_encoder.pkl'))
             self.feature_names = joblib.load(os.path.join(self.model_dir, 'feature_names.pkl'))
             
-            # Load BERT extractor if needed (check if 'bert_0' is in feature names)
-            if any('bert_' in f for f in self.feature_names) and BERTFeatureExtractor:
+            
+            # Always load BERT extractor since the model was trained with InLegalBERT
+            if BERTFeatureExtractor:
                 self.bert_extractor = BERTFeatureExtractor()
                 print("✅ BERT Extractor loaded for inference")
                 
@@ -64,14 +75,17 @@ class OutcomePredictor:
     def prepare_features(self, features: Dict[str, Any], use_bert: bool = True) -> np.ndarray:
         """Encode and scale features for inference"""
         # Metadata Features
-        categorical_features = ['court', 'judge', 'case_type', 'legal_domain']
+        # Metadata Features
+        # Dynamically determine categorical features from the stored encoders
+        categorical_features = list(self.feature_encoders.keys())
+        # All other non-BERT features are numerical
         numerical_features = [f for f in self.feature_names if f not in categorical_features and not f.startswith('bert_')]
         
         encoded_data = []
         
         # Categories
         for feature in categorical_features:
-            val = str(features.get(feature, ''))
+            val = str(features.get(feature, 'unknown'))
             encoder = self.feature_encoders.get(feature)
             if encoder:
                 if val in encoder.classes_:
@@ -88,7 +102,6 @@ class OutcomePredictor:
             encoded_data.append(np.array([[float(val)]]))
             
         X_meta = np.hstack(encoded_data)
-        X_meta = self.scaler.transform(X_meta)
         
         # BERT Features
         if self.bert_extractor:
@@ -98,15 +111,17 @@ class OutcomePredictor:
                 embedding = self.bert_extractor.get_text_embedding(text)
                 X_bert = embedding.reshape(1, -1)
             else:
-                # Legacy Mode: Simulate missing semantic knowledge by zeroing out embeddings
-                # This tests how well the model does relying ONLY on metadata, 
-                # effectively simulating a metadata-only model.
-                X_bert = np.zeros((1, 384))
+                # Legacy Mode: Simulate missing semantic knowledge
+                dim = getattr(self.bert_extractor, 'embedding_dim', 768)
+                X_bert = np.zeros((1, dim))
             
             # Combine
             X = np.hstack([X_meta, X_bert])
         else:
             X = X_meta
+
+        # Scale the combined features (matches 771 dims)
+        X = self.scaler.transform(X)
             
         return X
 
@@ -138,20 +153,34 @@ class OutcomePredictor:
             else:
                 confidence_level = "Low"
             
+            
             outcome_probs = {
                 self.outcome_encoder.inverse_transform([i])[0]: float(prob)
                 for i, prob in enumerate(probs)
             }
+            
+            # Derived Legal Metrics
+            petitioner_win_prob = outcome_probs.get('allowed', 0.0) + outcome_probs.get('partly_allowed', 0.0) + outcome_probs.get('settlement', 0.0)
+            respondent_win_prob = outcome_probs.get('dismissed', 0.0)
+            dismissal_risk = outcome_probs.get('dismissed', 0.0)
+            appeal_success = outcome_probs.get('allowed', 0.0)
             
             return {
                 'predicted_outcome': outcome,
                 'confidence': confidence,
                 'confidence_level': confidence_level,
                 'probabilities': outcome_probs,
+                'legal_metrics': {
+                    'petitioner_win_probability': round(petitioner_win_prob * 100, 1),
+                    'respondent_win_probability': round(respondent_win_prob * 100, 1),
+                    'case_dismissal_risk': round(dismissal_risk * 100, 1),
+                    'appeal_success_rate': round(appeal_success * 100, 1),
+                },
                 'method': 'Stacking Ensemble (BERT+ML)' if use_bert else 'Legacy Model (Metadata Only)'
             }
             
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return {"error": f"Prediction failed: {str(e)}"}
+            print(f"❌ Prediction Error: {str(e)}")
+            return {"error": f"Internal Prediction Error: {str(e)}"}

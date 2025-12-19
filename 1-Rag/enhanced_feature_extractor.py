@@ -104,6 +104,11 @@ class EnhancedFeatureExtractor:
             'is_ip_case': 1 if case_type in ['Trademark Infringement', 'Patent Dispute', 'Copyright Violation', 'Intellectual Property'] else 0,
             'is_contract_case': 1 if 'Contract' in case_type or 'Agreement' in case_type else 0,
             'is_corporate_case': 1 if case_type in ['Shareholder Dispute', 'Merger & Acquisition Dispute', 'Joint Venture Dispute'] else 0,
+            
+            # New Schema Keys (Defaults)
+            'lower_court_decision': 'unknown',
+            'petitioner_type': 'unknown',
+            'main_statute': 'unknown'
         }
         
         return features

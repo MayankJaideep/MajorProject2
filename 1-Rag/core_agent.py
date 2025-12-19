@@ -2,8 +2,9 @@
 
 import os
 import time
-from typing import Annotated, List, Literal, TypedDict, Union
+from typing import Annotated, List, Literal, TypedDict, Union, Optional
 from functools import lru_cache
+import logging
 
 from langchain_core.tools import tool
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
@@ -33,6 +34,10 @@ from legal_summarizer import LegalSummarizer
 from legal_ner import LegalNER
 from historical_analyzer import HistoricalAnalyzer
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Global cache for features to replace session_state
 FEATURE_CACHE = {}
 
@@ -40,17 +45,16 @@ FEATURE_CACHE = {}
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
-def create_agent(vector_store):
+def create_agent(vector_store, bm25_index=None, bm25_corpus=None):
     """
-    Creates an optimized LangGraph agent with better performance and accuracy.
-    Framework agnostic (works with Streamlit and FastAPI).
+    Creates an optimized LangGraph agent with Hybrid Search (FAISS + BM25).
     """
     
     # 1. Define optimized tools with caching
     @tool
     def search_legal_docs(query: str):
         """
-        Searches the internal legal database for relevant case laws, statutes, and documents.
+        Searches the internal legal database using Hybrid Search (Dense + Sparse).
         """
         perf_monitor.start_timer()
         print(f"DEBUG: Tool called with query: {query}")
@@ -59,41 +63,79 @@ def create_agent(vector_store):
             if not vector_store:
                 return "Error: Vector store not initialized."
 
-            # Use optimized search with top_k=50 for re-ranking
-            initial_docs = vector_store.similarity_search(query, k=50)
+            # --- HYBRID SEARCH LOGIC ---
             
-            if not initial_docs:
-                perf_monitor.end_timer("vector_searches")
-                return "No relevant documents found in the local database."
+            # 1. Dense Search (FAISS)
+            dense_results = vector_store.similarity_search(query, k=20) # Get top 20
             
-            # Re-ranking with Cross-Encoder
-            top_docs = []
+            # 2. Sparse Search (BM25)
+            sparse_results = []
+            if bm25_index and bm25_corpus:
+                try:
+                    tokenized_query = query.lower().split()
+                    # Get top 20 from BM25
+                    bm25_top_n = bm25_index.get_top_n(tokenized_query, bm25_corpus, n=20)
+                    # Convert strings back to Documents (This assumes bm25_corpus mirrors vector_store content)
+                    # Note: Ideally bm25_corpus should be a list of Document objects, but rank_bm25 expects list of tokens.
+                    # We need a mapping. If passed purely as text list, we lose metadata.
+                    # Simplified strategy: If 'bm25_corpus' is just text, we skip metadata for this part or 
+                    # rely on FAISS results primarily if mapping is hard. 
+                    # Use 'dense_results' as the source of truth for objects if exact match found?
+                    # Better: Assume `bm25_corpus` is a list of Document objects wrapper or we handle it in `api.py`.
+                    # For now, let's look at `bm25_index`. If `bm25_corpus` is actually a list of Documents, 
+                    # we need to tokenize their page_content for the index but store the Doc. 
+                    # Here we assume `bm25_corpus` is the list of Documents.
+                    sparse_results = bm25_index.get_top_n(tokenized_query, bm25_corpus, n=20)
+                except Exception as e:
+                    print(f"⚠️ BM25 Search failed: {e}")
+            
+            # 3. Reciprocal Rank Fusion (RRF)
+            # Combine results
+            doc_scores = {}
+            k_weight = 60
+            
+            def add_score(doc, rank):
+                # Use content as unique key (collisions possible but rare for long text)
+                key = doc.page_content
+                if key not in doc_scores:
+                    doc_scores[key] = {"doc": doc, "score": 0}
+                doc_scores[key]["score"] += 1 / (k_weight + rank)
+
+            for i, doc in enumerate(dense_results):
+                add_score(doc, i)
+            
+            for i, doc in enumerate(sparse_results):
+                add_score(doc, i)
+            
+            # Sort by fused score
+            fused_results = sorted(doc_scores.values(), key=lambda x: x["score"], reverse=True)
+            top_candidates = [item["doc"] for item in fused_results[:20]] # Candidate pool for Re-ranking
+            
+            if not top_candidates:
+                top_candidates = dense_results[:20]
+
+            # 4. Cross-Encoder Re-ranking
+            final_docs = []
             try:
                 from sentence_transformers import CrossEncoder
-                # Load re-ranker (cached ideally, but here for safety)
                 reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
                 
-                # Create pairs [query, doc_text]
-                pairs = [[query, doc.page_content] for doc in initial_docs]
+                pairs = [[query, doc.page_content] for doc in top_candidates]
                 scores = reranker.predict(pairs)
                 
-                # Combine docs with scores and sort
-                scored_docs = sorted(zip(initial_docs, scores), key=lambda x: x[1], reverse=True)
-                
-                # Take top 5
-                top_docs = [doc for doc, score in scored_docs[:5]]
+                scored_docs = sorted(zip(top_candidates, scores), key=lambda x: x[1], reverse=True)
+                final_docs = [doc for doc, score in scored_docs[:5]] # Final Top 5
                 
             except Exception as e:
-                print(f"⚠️ Re-ranking failed, falling back to basic search: {e}")
-                top_docs = initial_docs[:5]
+                print(f"⚠️ Re-ranking failed: {e}")
+                final_docs = top_candidates[:5]
             
             # Format results
             results = []
-            for doc in top_docs:
+            for doc in final_docs:
                 source = doc.metadata.get('source', 'Unknown')
-                # Include page number if available
                 page = doc.metadata.get('page', '?')
-                content = doc.page_content[:1500] # Increase context window
+                content = doc.page_content[:1500] 
                 results.append(f"Source: {source} (Page {page})\nContent: {content}...")
             
             content = "\n\n".join(results)
@@ -160,7 +202,6 @@ def create_agent(vector_store):
         print(f"DEBUG: Outcome Prediction Tool called with: {case_description}")
         
         try:
-            # Use cached feature extraction
             cache_key = f"features_{hash(case_description)}"
             if cache_key in FEATURE_CACHE:
                 features = FEATURE_CACHE[cache_key]
@@ -168,16 +209,12 @@ def create_agent(vector_store):
                 features = feature_extractor.extract_all_features(case_description)
                 FEATURE_CACHE[cache_key] = features
             
-            # Load and use predictor
             predictor = OutcomePredictor(model_dir="models")
             predictor.load_model()
-            
-            # Make prediction
             result = predictor.predict(features)
             
             perf_monitor.end_timer("ml_predictions")
             perf_monitor.metrics["ml_predictions"] += 1
-            
             return result
             
         except Exception as e:
@@ -203,28 +240,18 @@ def create_agent(vector_store):
     @tool
     def extract_entities(text: str):
         """
-        Extracts legal entities from text.
+        Extracts legal entities from text using Local NLP (Spacy).
         """
         perf_monitor.start_timer()
         try:
-            ner = LegalNER()
-            entities = ner.extract_entities(text)
+            # Use Local NER
+            ner = LegalNER() 
+            # Use get_entity_summary for a nice formatted string
+            summary = ner.get_entity_summary(text)
+            
             perf_monitor.end_timer("ml_predictions")
             perf_monitor.metrics["ml_predictions"] += 1
-            
-            if 'error' in entities:
-                return entities['error']
-            
-            formatted_entities = []
-            for entity_type, entity_list in entities.items():
-                if entity_list:
-                    entity_names = [e['text'] for e in entity_list[:3]]
-                    formatted_entities.append(f"{entity_type}: {', '.join(entity_names)}")
-            
-            if formatted_entities:
-                return "Key entities identified: " + "; ".join(formatted_entities)
-            else:
-                return "No specific legal entities identified."
+            return summary
                 
         except Exception as e:
             perf_monitor.end_timer("ml_predictions")

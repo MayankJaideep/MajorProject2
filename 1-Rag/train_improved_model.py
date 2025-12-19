@@ -1,281 +1,228 @@
 """
-Advanced Model Training Pipeline (Level 2).
-Features:
-- BERT Semantic Embeddings (all-MiniLM-L6-v2)
-- Stacking Ensemble (XGBoost + LightGBM + RandomForest -> LogisticRegression)
-- Optuna Hyperparameter Tuning
-- SHAP Explanations
+Train Improved ML Model (Stacking Ensemble) with Optuna Optimization & InLegalBERT
 """
 
-import os
 import pandas as pd
 import numpy as np
 import joblib
-import optuna
-import shap
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, matthews_corrcoef, brier_score_loss
+import os
+import argparse
+import logging
+from typing import Dict, Any, List
+
+# ML Libraries
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report, accuracy_score, matthews_corrcoef, brier_score_loss, log_loss
+
+# Ensembles
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.pipeline import Pipeline
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+
+# Balancing
 from imblearn.over_sampling import SMOTE
-import warnings
-import logging
 
-# Feature Extractors
+# Optimization
+import optuna
+
+# Custom
 try:
-    from enhanced_feature_extractor import EnhancedFeatureExtractor
+    from bert_feature_extractor import bert_extractor
 except ImportError:
-    import sys
-    sys.path.append(os.path.dirname(__file__))
-    from enhanced_feature_extractor import EnhancedFeatureExtractor
+    bert_extractor = None
 
-try:
-    from bert_feature_extractor import BERTFeatureExtractor
-except ImportError:
-    BERTFeatureExtractor = None
-
-warnings.filterwarnings('ignore')
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-try:
-    from xgboost import XGBClassifier
-    XGBOOST_AVAILABLE = True
-except ImportError:
-    logger.warning("XGBoost not installed. Install with: pip install xgboost")
-    XGBOOST_AVAILABLE = False
-
-try:
-    from lightgbm import LGBMClassifier
-    LIGHTGBM_AVAILABLE = True
-except ImportError:
-    logger.warning("LightGBM not installed. Install with: pip install lightgbm")
-    LIGHTGBM_AVAILABLE = False
-
-
-class StackingModelTrainer:
-    """Train Stacking Ensemble with BERT + Metadata features"""
-    
-    def __init__(self, model_dir: str = "models"):
-        """Initialize trainer"""
+class LegalOutcomeTrainer:
+    def __init__(self, data_path: str, model_dir: str = "models"):
+        self.data_path = data_path
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         
-        self.meta_extractor = EnhancedFeatureExtractor()
-        self.bert_extractor = BERTFeatureExtractor() if BERTFeatureExtractor else None
-        
-        self.scaler = StandardScaler()
-        self.outcome_encoder = LabelEncoder()
+        # State
+        self.df = None
+        self.X = None
+        self.y = None
+        self.encoder = None
+        self.scaler = None
         self.feature_encoders = {}
-        self.stacking_model = None
-        self.feature_names = []
-        self.metadata_feature_count = 0
-    
-    def load_and_prepare_data(self, data_path: str):
-        """Load data and extract combined features (Metadata + BERT)."""
-        logger.info("Loading training data...")
-        df = pd.read_csv(data_path)
-        logger.info(f"Total cases: {len(df)}")
+        self.best_params = {}
         
-        # 1. Extract Metadata Features
-        logger.info("Extracting metadata features...")
-        meta_features_list = []
-        for idx, row in df.iterrows():
-            text = row.get('description', row.get('title', ''))
-            features = self.meta_extractor.extract_all_features(text)
-            meta_features_list.append(features)
+    def load_and_clean_data(self):
+        """Load data, handle new structured columns"""
+        logger.info(f"📂 Loading data from {self.data_path}")
+        self.df = pd.read_csv(self.data_path)
         
-        meta_df = pd.DataFrame(meta_features_list)
-        self.metadata_feature_count = len(meta_df.columns)
+        # Standardize Outcome
+        self.df['outcome'] = self.df['outcome'].str.lower().str.strip()
+        valid_outcomes = ['allowed', 'dismissed', 'settlement', 'partly_allowed']
+        self.df = self.df[self.df['outcome'].isin(valid_outcomes)]
         
-        X_meta = self._prepare_metadata_features(meta_df, fit=True)
+        # --- FEATURE ENGINEERING (New rich features) ---
+        # Fill missing new columns if working with mixed data
+        new_cols = ['lower_court_decision', 'petitioner_type', 'main_statute']
+        for col in new_cols:
+            if col not in self.df.columns:
+                self.df[col] = 'unknown'
+            else:
+                self.df[col] = self.df[col].fillna('unknown').str.lower()
         
-        # 2. Extract BERT Features
-        if self.bert_extractor:
-            logger.info("Extracting BERT semantic embeddings...")
-            bert_features_list = []
-            for idx, row in df.iterrows():
-                text = row.get('description', row.get('title', ''))
-                # Get 384-dim embedding
-                embedding = self.bert_extractor.get_text_embedding(text)
-                bert_features_list.append(embedding)
-            
-            X_bert = np.array(bert_features_list)
-            
-            # Combine Metadata + BERT
-            logger.info(f"Combining Metadata ({X_meta.shape[1]}) + BERT ({X_bert.shape[1]})")
-            X = np.hstack([X_meta, X_bert])
-            
-            # Update feature names for BERT dimensions
-            bert_names = [f"bert_{i}" for i in range(X_bert.shape[1])]
-            self.feature_names.extend(bert_names)
-        else:
-            logger.warning("BERT extractor not available, using only metadata.")
-            X = X_meta
-            
-        # Encode outcomes
-        y = self.outcome_encoder.fit_transform(df['outcome'])
+        logger.info(f"✅ Data Loaded. Shape: {self.df.shape}")
         
-        return X, y
-    
-    def _prepare_metadata_features(self, df: pd.DataFrame, fit: bool = True) -> np.ndarray:
-        """Encode and scale metadata features"""
-        categorical_features = ['court', 'judge', 'case_type', 'legal_domain']
-        numerical_features = [col for col in df.columns if col not in categorical_features]
+    def extract_features(self):
+        """Combine Metadata + Structured Features + BERT"""
         
-        encoded_data = [] 
+        # 1. Categorical Encoders
+        cat_features = ['court', 'judge', 'case_type', 'lower_court_decision', 'petitioner_type']
+        # Note: 'main_statute' might be too high cardinality, treat as text or top-N?
+        # For now, let's skip statute categorical encoding to avoid sparsity, reliance on BERT for it.
         
-        # Encode categorical features
-        for feature in categorical_features:
-            if feature in df.columns:
-                if fit:
-                    self.feature_encoders[feature] = LabelEncoder()
-                    encoded = self.feature_encoders[feature].fit_transform(df[feature].astype(str))
-                else:
-                    encoded = []
-                    for val in df[feature].astype(str):
-                        if val in self.feature_encoders[feature].classes_:
-                            encoded.append(self.feature_encoders[feature].transform([val])[0])
-                        else:
-                            encoded.append(0) 
-                    encoded = np.array(encoded)
+        encoded_metas = []
+        feature_names = []
+        
+        for col in cat_features:
+            if col in self.df.columns:
+                le = LabelEncoder()
+                # Handle unknown
+                self.df[col] = self.df[col].fillna('unknown').astype(str)
+                encoded_cols = le.fit_transform(self.df[col])
+                encoded_metas.append(encoded_cols.reshape(-1, 1))
+                self.feature_encoders[col] = le
+                feature_names.append(col)
                 
-                encoded_data.append(encoded.reshape(-1, 1))
+        X_meta = np.hstack(encoded_metas)
         
-        # Add numerical features
-        for feature in numerical_features:
-            if feature in df.columns:
-                vals = df[feature].values.reshape(-1, 1)
-                encoded_data.append(vals)
-        
-        if not encoded_data:
-            raise ValueError("No features extracted")
+        # 2. BERT Embeddings
+        logger.info("🧠 Generating InLegalBERT Embeddings...")
+        if bert_extractor:
+            # Use 'description' or fall back to 'title' if available
+            if 'title' in self.df.columns:
+                texts = self.df['description'].fillna(self.df['title']).tolist()
+            else:
+                texts = self.df['description'].fillna("").tolist()
             
-        X = np.hstack(encoded_data)
-        
-        # Scale
-        if fit:
-            X = self.scaler.fit_transform(X)
-            self.feature_names = categorical_features + numerical_features
+            embeddings = bert_extractor.model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
+            logger.info(f"   Shape: {embeddings.shape}")
         else:
-            X = self.scaler.transform(X)
-        
-        return X
-    
-    def train_pipeline(self, data_path: str, use_smote: bool = True):
-        """Train Stacking Ensemble"""
-        print("=" * 80)
-        print("STACKING ENSEMBLE TRAINING (XGB + LGBM + RF + BERT)")
-        print("=" * 80)
-        
-        X, y = self.load_and_prepare_data(data_path)
-        
-        # Split Data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-        
-        # SMOTE
-        if use_smote:
-            logger.info("Applying SMOTE...")
-            smote = SMOTE(random_state=42)
-            X_train, y_train = smote.fit_resample(X_train, y_train)
+            embeddings = np.zeros((len(self.df), 384)) # Fallback
             
+        # Combine
+        self.X = np.hstack([X_meta, embeddings])
+        self.scaler = StandardScaler()
+        self.X = self.scaler.fit_transform(self.X)
+        
+        # Encode Target
+        self.encoder = LabelEncoder()
+        self.y = self.encoder.fit_transform(self.df['outcome'])
+        
+        # Save feature names for inference
+        joblib.dump(feature_names, os.path.join(self.model_dir, 'feature_names.pkl'))
+        
+        logger.info(f"✅ Features Ready. X: {self.X.shape}")
+
+    def optimize_xgboost(self, X_train, y_train):
+        """Use Optuna to find best XGBoost params"""
+        logger.info("🔬 Starting Optuna Optimization for XGBoost...")
+        
+        def objective(trial):
+            param = {
+                'n_estimators': trial.suggest_int('n_estimators', 50, 300),
+                'max_depth': trial.suggest_int('max_depth', 3, 10),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
+                'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+                'eval_metric': 'mlogloss',
+                'n_jobs': -1
+            }
+            
+            clf = XGBClassifier(**param)
+            # Stratified CV for stability
+            scores = cross_val_score(clf, X_train, y_train, cv=3, scoring='accuracy')
+            return scores.mean()
+
+        study = optuna.create_study(direction='maximize')
+        study.optimize(objective, n_trials=10) # 10 trials to be fast, increase for 90%
+        
+        logger.info(f"   Best Params: {study.best_params}")
+        return XGBClassifier(**study.best_params)
+
+    def train_pipeline(self):
+        # Split
+        X_train, X_test, y_train, y_test = train_test_split(self.X, self.y, test_size=0.2, random_state=42, stratify=self.y)
+        
+        # Balance
+        smote = SMOTE(random_state=42)
+        X_train_bal, y_train_bal = smote.fit_resample(X_train, y_train)
+        
         # Base Learners
-        estimators = []
-        if XGBOOST_AVAILABLE:
-            estimators.append(('xgb', XGBClassifier(
-                n_estimators=300, 
-                max_depth=6, 
-                learning_rate=0.1, 
-                use_label_encoder=False, 
-                eval_metric='mlogloss'
-            )))
-        if LIGHTGBM_AVAILABLE:
-            estimators.append(('lgbm', LGBMClassifier(
-                n_estimators=300, 
-                max_depth=6, 
-                learning_rate=0.1, 
-                verbose=-1
-            )))
+        # 1. Optimized XGBoost
+        xgb_optimized = self.optimize_xgboost(X_train_bal, y_train_bal)
         
-        estimators.append(('rf', RandomForestClassifier(n_estimators=300, max_depth=10, random_state=42, class_weight='balanced')))
+        # 2. LightGBM
+        lgbm = LGBMClassifier(n_estimators=150, learning_rate=0.05)
         
-        # Stacking Classifier
-        logger.info("Training Stacking Ensemble...")
-        self.stacking_model = StackingClassifier(
+        # 3. Random Forest (Robust Baseline)
+        rf = RandomForestClassifier(n_estimators=200, max_depth=10)
+        
+        estimators = [
+            ('xgb', xgb_optimized),
+            ('lgbm', lgbm),
+            ('rf', rf)
+        ]
+        
+        # Stacking
+        logger.info("🏗️ Building Stacking Ensemble...")
+        stack_clf = StackingClassifier(
             estimators=estimators,
             final_estimator=LogisticRegression(),
-            cv=5,
-            n_jobs=1  # Avoid pickling issues
+            cv=3
         )
         
-        self.stacking_model.fit(X_train, y_train)
-        
         # Calibration (Platt Scaling)
-        logger.info("Calibrating model probabilities...")
-        self.calibrated_model = CalibratedClassifierCV(self.stacking_model, method='sigmoid', cv='prefit')
-        self.calibrated_model.fit(X_train, y_train)
+        self.calibrated_model = CalibratedClassifierCV(stack_clf, method='sigmoid', cv=3)
+        self.calibrated_model.fit(X_train_bal, y_train_bal)
         
         # Evaluate
-        self.evaluate_model(self.calibrated_model, X_test, y_test)
+        self.evaluate(X_test, y_test)
         
         # Save
         self.save_model()
-        
-        return self.calibrated_model
 
-    def evaluate_model(self, model, X_test, y_test):
-        """Detailed evaluation"""
-        print("\n📈 Evaluating Stacking Ensemble...")
-        y_pred = model.predict(X_test)
+    def evaluate(self, X_test, y_test):
+        y_pred = self.calibrated_model.predict(X_test)
+        y_prob = self.calibrated_model.predict_proba(X_test)
         
-        classes = [self.outcome_encoder.inverse_transform([c])[0] for c in np.unique(y_test)]
-        print("\nClassification Report:")
-        print(classification_report(y_test, y_pred, target_names=classes, zero_division=0))
-        
-        mcc = matthews_corrcoef(y_test, y_pred)
-        print(f"Matthews Correlation Coefficient (MCC): {mcc:.4f}")
-        
-        # Brier Score (only works for binary or if averaged, but we can do per-class or just weighted)
-        # For multi-class, brier_score_loss isn't direct in sklearn < 0.24 without care, 
-        # but let's try a simple approach or skip if complex. 
-        # Actually, simpler: just print probabilities for a few samples to verify calibration visually
-        probs = model.predict_proba(X_test)
-        confidence = np.max(probs, axis=1)
-        avg_confidence = np.mean(confidence)
         acc = accuracy_score(y_test, y_pred)
+        mcc = matthews_corrcoef(y_test, y_pred)
         
-        print(f"Average Confidence: {avg_confidence:.4f}")
-        print(f"Actual Accuracy:    {acc:.4f}")
-        print(f"Calibration Gap:    {abs(avg_confidence - acc):.4f}")
+        logger.info(f"\n📊 --- FINAL RESULTS ---")
+        logger.info(f"   Accuracy: {acc:.2%}")
+        logger.info(f"   MCC Score: {mcc:.4f}")
+        logger.info("\n" + classification_report(y_test, y_pred, target_names=self.encoder.classes_))
 
     def save_model(self):
-        """Save artifacts"""
-        print(f"\n💾 Saving Ensemble...")
-        # Save the CALIBRATED model
         joblib.dump(self.calibrated_model, os.path.join(self.model_dir, 'stacking_model.pkl'))
         joblib.dump(self.feature_encoders, os.path.join(self.model_dir, 'feature_encoders.pkl'))
         joblib.dump(self.scaler, os.path.join(self.model_dir, 'feature_scaler.pkl'))
-        joblib.dump(self.outcome_encoder, os.path.join(self.model_dir, 'outcome_encoder.pkl'))
-        joblib.dump(self.feature_names, os.path.join(self.model_dir, 'feature_names.pkl'))
-        print("✅ Model saved.")
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default='data/training_cases.csv')
-    args = parser.parse_args()
-    
-    trainer = StackingModelTrainer()
-    if not os.path.exists(args.data) and os.path.exists(os.path.join('1-Rag', args.data)):
-        args.data = os.path.join('1-Rag', args.data)
-        
-    trainer.train_pipeline(args.data)
+        joblib.dump(self.encoder, os.path.join(self.model_dir, 'outcome_encoder.pkl'))
+        logger.info("💾 Model Artifacts Saved.")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default="1-Rag/data/cleaned_training_data.csv")
+    args = parser.parse_args()
+    
+    trainer = LegalOutcomeTrainer(args.data)
+    trainer.load_and_clean_data()
+    trainer.extract_features()
+    trainer.train_pipeline()

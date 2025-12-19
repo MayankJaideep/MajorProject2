@@ -1,189 +1,255 @@
 """
-Fetch real legal cases from Indian Kanoon API and label them using LLM (Groq) for high-quality training data.
-Saves incrementally to avoid data loss.
+Fetch real legal cases from Indian Kanoon API and label them using LLM (Gemini/Groq).
+Extracts detailed structured data to push accuracy > 90%.
 """
 
 import os
 import requests
 import pandas as pd
 import time
+import random
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from typing import Optional, Literal
+from pydantic import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import PydanticOutputParser
 
 load_dotenv()
 
-API_TOKEN = os.getenv("INDIAN_KANOON_API_TOKEN")
-BASE_URL = "https://api.indiankanoon.org"
+# --- CONFIGURATION ---
+INDIAN_KANOON_API = os.getenv("INDIAN_KANOON_API_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Initialize LLM for accurate labeling
-llm = ChatGroq(
-    model="llama-3.1-8b-instant",
-    temperature=0.0,
-    api_key=os.getenv("GROQ_API_KEY")
-)
+OUTPUT_PATH = "1-Rag/data/real_cases_rich.csv" # New rich dataset
 
-OUTPUT_PATH = "1-Rag/data/real_cases_fetched.csv"
-
-def save_cases_incrementally(new_cases):
-    """Save new cases to CSV incrementally"""
-    if not new_cases:
-        return
-
-    df_new = pd.DataFrame(new_cases)
-    # Filter unknown
-    df_new = df_new[df_new['outcome'] != 'unknown']
-    
-    if df_new.empty:
-        return
-
-    if os.path.exists(OUTPUT_PATH):
+# --- LLM SETUP (Multi-Provider) ---
+def get_llm():
+    """Get the best available LLM"""
+    if GROQ_API_KEY:
         try:
-            existing_df = pd.read_csv(OUTPUT_PATH)
-            # Concat and dedup
-            final_df = pd.concat([existing_df, df_new]).drop_duplicates(subset=['title'])
-        except:
-            final_df = df_new
-    else:
-        final_df = df_new
-        
-    final_df.to_csv(OUTPUT_PATH, index=False)
-    print(f"💾 Saved {len(final_df)} cases total (Added batch of {len(df_new)})")
-
-def fetch_cases(query, max_pages=3): # Reduced max_pages for speed
-    """Fetch cases for a query"""
-    if not API_TOKEN:
-        print("❌ Error: INDIAN_KANOON_API_TOKEN not set.")
-        return []
-
-    print(f"🔍 Fetching cases for query: '{query}'...")
-    cases = []
-    
-    headers = {"Authorization": f"Token {API_TOKEN}"}
-    
-    for page in range(max_pages):
-        try:
-            url = f"{BASE_URL}/search/"
-            params = {
-                "formInput": query,
-                "pagenum": page
-            }
-            
-            resp = requests.post(url, headers=headers, data=params, timeout=10)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                docs = data.get('docs', [])
-                
-                if not docs:
-                    break
-                
-                print(f"   Page {page}: Processing {len(docs)} cases with LLM...")
-                
-                page_cases = []
-                for doc in docs:
-                    title = doc.get('title', '')
-                    snippet = doc.get('headline', '') + " " + doc.get('doc', '')
-                    
-                    # LLM Labeling
-                    outcome = classify_outcome_with_llm(title, snippet)
-                    
-                    if outcome != 'unknown':
-                        case = {
-                            'title': title,
-                            'description': snippet,
-                            'court': doc.get('docsource', 'Unknown Court'),
-                            'date': doc.get('publishdate', ''),
-                            'outcome': outcome
-                        }
-                        page_cases.append(case)
-                
-                cases.extend(page_cases)
-                # Save after every page to be safe
-                save_cases_incrementally(page_cases)
-                
-                time.sleep(1) # Rate limit
-            else:
-                print(f"   Error fetching page {page}: {resp.status_code}")
-                
+            from langchain_groq import ChatGroq
+            print("⚡ Using Groq (Llama-3) for Labeling...")
+            return ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.0,
+                api_key=GROQ_API_KEY
+            )
         except Exception as e:
-            print(f"   Exception: {e}")
+            print(f"⚠️ Groq Init Failed: {e}")
+
+    if GOOGLE_API_KEY:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            print("✨ Using Google Gemini (Flash) for Labeling...")
+            return ChatGoogleGenerativeAI(
+                model="gemini-1.5-flash",
+                temperature=0.0,
+                google_api_key=GOOGLE_API_KEY,
+                max_retries=3
+            )
+        except Exception as e:
+            print(f"⚠️ Gemini Init Failed: {e}")
             
-    return cases
+    raise ValueError("No valid API Key found! Please set GOOGLE_API_KEY or GROQ_API_KEY.")
 
-def classify_outcome_with_llm(title, text):
-    """Use LLM to infer outcome from text snippet"""
+# --- STRUCTURED EXTRACTION MODEL ---
+class DetailedCase(BaseModel):
+    outcome: Literal['allowed', 'dismissed', 'partly_allowed', 'settlement', 'unknown'] = Field(description="Final outcome of the case")
+    lower_court_decision: Literal['convicted', 'acquitted', 'decreed', 'dismissed', 'unknown'] = Field(description="Decision of the lower court being appealed")
+    petitioner_type: Literal['state', 'individual', 'corporate', 'unknown'] = Field(description="Category of the petitioner")
+    main_statute: str = Field(description="Main act or section mentioned (e.g. 'IPC 302', 'Contract Act')")
+    win_probability_estimate: float = Field(description="Estimated win probability based on text (0.0 to 1.0)")
+
+parser = PydanticOutputParser(pydantic_object=DetailedCase)
+
+# --- CORE LOGIC ---
+# --- HEURISTICS ---
+def infer_outcome_heuristic(title, text):
+    """Refined heuristic for high-precision labeling without API"""
+    t = title.lower()
+    txt = text.lower()
+    
+    # Strong Signals in Title
+    if 'dismissed' in t or 'dismissal' in t: return 'dismissed'
+    if 'allowed' in t or 'acquitted' in t or 'quashed' in t or 'decreed' in t: return 'allowed'
+    if 'settled' in t or 'compromised' in t: return 'settlement'
+    
+    # Strong Signals in Snippet (only if very clear)
+    if 'appeal is dismissed' in txt: return 'dismissed'
+    if 'appeal is allowed' in txt: return 'allowed'
+    
+    return None
+
+def process_case_text(llm, title, text):
+    """Refined extraction using Pydantic Parser"""
+    
+    # SYSTEM PROMPT: STRICT JSON
+    system_prompt = """
+    You are a Legal Data Annotator. Extract structured data from the case snippet.
+    
+    CRITICAL OUTPUT RULES:
+    1. Return VALID JSON ONLY.
+    2. DO NOT include comments (//) inside the JSON.
+    3. DO NOT include markdown code blocks.
+    
+    {format_instructions}
+    """
+    
+    user_prompt = f"""
+    Case Title: {title}
+    Text Snippet: {text[:2000]}
+    """
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("human", user_prompt),
+    ])
+    
+    chain = prompt | llm | parser
+    
     try:
-        prompt = f"""
-        Analyze the following legal case snippet and determine the outcome.
-        
-        Case Title: {title}
-        Snippet: {text[:1000]}
-        
-        Classify into exactly one of these categories:
-        - allowed (if appeal allowed, acquitted, suit decreed, granted)
-        - dismissed (if appeal dismissed, convicted, suit dismissed, denied)
-        - partly_allowed (if modified, partly allowed)
-        - settlement (if compromised, settled)
-        - unknown (if unclear)
-        
-        Return ONLY the category name in lowercase.
-        """
-        
-        response = llm.invoke([HumanMessage(content=prompt)])
-        result = response.content.strip().lower()
-        
-        valid_outcomes = ['allowed', 'dismissed', 'partly_allowed', 'settlement']
-        
-        # Cleanup
-        for valid in valid_outcomes:
-            if valid in result:
-                return valid
-        return 'unknown'
-        
+        return chain.invoke({"format_instructions": parser.get_format_instructions()})
     except Exception as e:
-        # Fallback to heuristic
-        return infer_outcome_heuristic(text)
+        print(f"   ⚠️ Parsing/API Error: {e}")
+        return None
 
-def infer_outcome_heuristic(text):
-    """Fallback heuristic"""
-    text = text.lower()
-    if 'dismissed' in text or 'reject' in text or 'convicted' in text:
-        return 'dismissed'
-    elif 'allowed' in text or 'granted' in text or 'acquitted' in text or 'quashed' in text:
-        return 'allowed'
-    return 'unknown'
+def fetch_and_process():
+    if not INDIAN_KANOON_API:
+        print("❌ Error: INDIAN_KANOON_API_TOKEN not set.")
+        return
 
-def main():
-    # Focused queries likely to yield clear outcomes
+    try:
+        llm = get_llm()
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
+
     queries = [
         "criminal appeal allowed supreme court",
-        "criminal appeal dismissed supreme court",
+        "criminal appeal dismissed supreme court", 
         "civil appeal allowed",
         "civil appeal dismissed",
         "writ petition allowed",
         "writ petition dismissed",
-        "bail granted",
+        "bail granted", 
         "bail rejected",
-        "suit decreed specific performance",
-        "suit dismissed recovery of money",
-        "divorce granted cruelty",
         "murder conviction upheld",
-        "acquittal confirmed murder",
-        "consumer complaint allowed compensation"
+        "acquittal confirmed",
+        "insurance claim allowed",
+        "land acquisition compensation enhanced",
+        "cheque dishonour conviction",
+        "anticipatory bail granted"
     ]
     
-    # Check current count
+    # Load existing
+    all_cases = []
     if os.path.exists(OUTPUT_PATH):
         try:
-            curr = len(pd.read_csv(OUTPUT_PATH))
-            print(f"Starting with {curr} existing cases.")
+            all_cases = pd.read_csv(OUTPUT_PATH).to_dict('records')
+            print(f"📂 Loaded {len(all_cases)} existing cases.")
         except:
             pass
+            
+    headers = {"Authorization": f"Token {INDIAN_KANOON_API}"}
+    
+    print(f"🚀 Starting Deep Data Mining ({len(queries)} queries)...")
+    
+    for q_idx, query in enumerate(queries):
+        print(f"\n🔍 Query [{q_idx+1}/{len(queries)}]: '{query}'")
+        
+        for page in range(8): # Fetch 8 pages (80 cases) per query
+            try:
+                url = "https://api.indiankanoon.org/search/"
+                params = {"formInput": query, "pagenum": page}
+                
+                resp = requests.post(url, headers=headers, data=params, timeout=10)
+                if resp.status_code != 200:
+                    print(f"   ⚠️ API Error: {resp.status_code}")
+                    break
+                    
+                docs = resp.json().get('docs', [])
+                if not docs: break
+                
+                new_batch = []
+                print(f"   Processing Page {page} ({len(docs)} docs)...")
+                
+                for doc in docs:
+                    title = doc.get('title', '')
+                    # Skip if already exists
+                    if any(c['title'] == title for c in all_cases):
+                        continue
+                        
+                    text = doc.get('headline', '') + " " + doc.get('doc', '')
+                    
+                    # 1. Try HEURISTIC First (Fast & Free)
+                    heuristic_outcome = infer_outcome_heuristic(title, text)
+                    
+                    # 2. WEAK SUPERVISION (Query Inference)
+                    # If heuristic is unsure, use the query itself as a noisy label
+                    label_source = "Heuristic"
+                    if not heuristic_outcome:
+                        q_lower = query.lower()
+                        if 'allowed' in q_lower or 'granted' in q_lower:
+                            heuristic_outcome = 'allowed'
+                            label_source = "WeakLabel"
+                        elif 'dismissed' in q_lower or 'rejected' in q_lower:
+                            heuristic_outcome = 'dismissed'
+                            label_source = "WeakLabel"
+                        elif 'conviction upheld' in q_lower or 'acquittal confirmed' in q_lower:
+                            heuristic_outcome = 'dismissed' # Appeal fails
+                            label_source = "WeakLabel"
 
-    # Fetch more data
-    for q in queries:
-        fetch_cases(q, max_pages=2) # 2 pages/query is faster
+                    if heuristic_outcome:
+                        # Success via Heuristic/Weak Label
+                        record = {
+                            'title': title,
+                            'description': text,
+                            'court': doc.get('docsource', 'Unknown'),
+                            'outcome': heuristic_outcome,
+                            'lower_court_decision': 'unknown',
+                            'petitioner_type': 'unknown',
+                            'main_statute': 'unknown',
+                            'win_prob': 1.0 if heuristic_outcome in ['allowed', 'settled'] else 0.0
+                        }
+                        new_batch.append(record)
+                        print(f"     ✅ [{label_source}] {title[:30]}... -> {heuristic_outcome}")
+                        
+                    else:
+                        # 3. LLM Fallback (Only if truly unknown)
+                        # Only use for ambiguous cases to save API Limit
+                        try:
+                            time.sleep(2) # Rate limit padding
+                            data = process_case_text(llm, title, text)
+                            if data and data.outcome != 'unknown':
+                                record = {
+                                    'title': title,
+                                    'description': text,
+                                    'court': doc.get('docsource', 'Unknown'),
+                                    'outcome': data.outcome,
+                                    'lower_court_decision': data.lower_court_decision,
+                                    'petitioner_type': data.petitioner_type,
+                                    'main_statute': data.main_statute,
+                                    'win_prob': data.win_probability_estimate
+                                }
+                                new_batch.append(record)
+                                print(f"     ✅ [LLM] {title[:30]}... -> {data.outcome}")
+                            else:
+                                print(f"     skip (unknown)")
+                        except Exception as extraction_err:
+                            print(f"     ❌ Extraction failed: {extraction_err}")
+                            pass
+                
+                if new_batch:
+                    all_cases.extend(new_batch)
+                    pd.DataFrame(all_cases).to_csv(OUTPUT_PATH, index=False)
+                    print(f"   💾 Saved {len(all_cases)} total cases.")
+                
+            except Exception as e:
+                print(f"   Critical Error on Page: {e}")
+                time.sleep(5)
+                
+            time.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    fetch_and_process()

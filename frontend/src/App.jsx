@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { LayoutDashboard, MessageSquare, BookOpen, Upload } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, BookOpen, Upload, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatInterface from './components/ChatInterface';
 import Dashboard from './components/Dashboard';
 import PDFUploader from './components/PDFUploader';
+import Chronology from './components/Chronology';
 
 function App() {
   const [activeTab, setActiveTab] = useState('chat');
@@ -11,6 +12,7 @@ function App() {
   const tabs = [
     { id: 'chat', label: 'Research Assistant', icon: MessageSquare },
     { id: 'dashboard', label: 'Prediction Dashboard', icon: LayoutDashboard },
+    { id: 'chronology', label: 'Case Timeline', icon: Clock },
     { id: 'upload', label: 'Knowledge Base', icon: Upload },
   ];
 
@@ -72,6 +74,7 @@ function App() {
             >
               {activeTab === 'chat' && <ChatInterface />}
               {activeTab === 'dashboard' && <Dashboard />}
+              {activeTab === 'chronology' && <Chronology />}
               {activeTab === 'upload' && <PDFUploader />}
             </motion.div>
           </AnimatePresence>
