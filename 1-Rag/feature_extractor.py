@@ -143,13 +143,16 @@ class FeatureExtractor:
     
     def extract_year(self, text: str) -> Optional[int]:
         """Extract year from text"""
-        # Pattern for years (2000-2024)
-        year_pattern = r"\b(20[0-2][0-9])\b"
+        from datetime import datetime
+        current_year = datetime.now().year
+        
+        # Pattern for years (1800-2099)
+        year_pattern = r"\b(1[89]\d{2}|20\d{2})\b"
         matches = re.findall(year_pattern, text)
         
         if matches:
-            # Return the most recent year found
-            years = [int(y) for y in matches if 2000 <= int(y) <= 2024]
+            # Return the most recent year found up to the current year
+            years = [int(y) for y in matches if 1800 <= int(y) <= current_year]
             if years:
                 return max(years)
         
@@ -208,12 +211,12 @@ class FeatureExtractor:
                     elif key == 'year':
                         try:
                             features['year'] = int(value) if value != "Unknown" else None
-                        except:
+                        except Exception:
                             features['year'] = None
                     elif key == 'complexity':
                         try:
                             features['complexity'] = int(value) if value != "Unknown" else 5
-                        except:
+                        except Exception:
                             features['complexity'] = 5
             
             return features
@@ -250,15 +253,15 @@ class FeatureExtractor:
                 if features.get(key) in [None, "Unknown"] and value not in [None, "Unknown"]:
                     features[key] = value
         
-        # Set defaults for still-missing features
-        if features['court'] == "Unknown":
-            features['court'] = "Delhi High Court"  # Default
-        if features['judge'] == "Unknown":
-            features['judge'] = "Justice A. Kumar"  # Default
-        if features['case_type'] == "Unknown":
-            features['case_type'] = "Breach of Contract"  # Default
+        # Using neutral defaults instead of hardcoded values
+        if features['court'] == "Unknown" or features['court'] is None:
+            features['court'] = "Unknown"
+        if features['judge'] == "Unknown" or features['judge'] is None:
+            features['judge'] = "Unknown"
+        if features['case_type'] == "Unknown" or features['case_type'] is None:
+            features['case_type'] = "Unknown"
         if features['year'] is None:
-            features['year'] = 2023  # Default to recent year
+            features['year'] = None
         
         return features
 

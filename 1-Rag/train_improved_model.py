@@ -8,16 +8,10 @@ import joblib
 import os
 import argparse
 import logging
-from typing import Dict, Any, List
-
 # ML Libraries
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report, accuracy_score, matthews_corrcoef, brier_score_loss, log_loss
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import classification_report, accuracy_score, matthews_corrcoef
 
 # Ensembles
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
@@ -199,7 +193,6 @@ class LegalOutcomeTrainer:
 
     def evaluate(self, X_test, y_test):
         y_pred = self.calibrated_model.predict(X_test)
-        y_prob = self.calibrated_model.predict_proba(X_test)
         
         acc = accuracy_score(y_test, y_pred)
         mcc = matthews_corrcoef(y_test, y_pred)
@@ -217,7 +210,6 @@ class LegalOutcomeTrainer:
         logger.info("💾 Model Artifacts Saved.")
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="1-Rag/data/cleaned_training_data.csv")
     args = parser.parse_args()

@@ -16,7 +16,7 @@ import time
 import uuid
 import json
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 import platform
 
 # Identify if Mac ARM for hardware acceleration
@@ -49,11 +49,10 @@ logger = logging.getLogger("lumina_api")
 app = FastAPI(title="Legal AI Research Engine API", version="2.3")
 
 # --- 2. SECURITY (CORS) ---
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -94,6 +93,7 @@ class AppState:
     bm25_index = None
     bm25_corpus = None
     semantic_cache_store = None # FAISS-backed semantic cache
+    memory_cache = deque(maxlen=100) # O(1) pops for recent queries
 
 state = AppState()
 
@@ -213,9 +213,9 @@ async def startup_event():
             )
         
         # Load Vector Store
-        # Since running from 1-Rag/, we need to go up one level
-        milvus_db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "services", "ingestion", "milvus_demo.db"))
-        print(f"DEBUG: Checking for Milvus DB at {milvus_db_path}")
+        from pathlib import Path
+        milvus_db_path = str(Path(__file__).resolve().parent.parent / "services" / "ingestion" / "milvus_demo.db")
+        logger.debug(f"Checking for Milvus DB at {milvus_db_path}")
         if os.path.exists(milvus_db_path):
              print(f"✅ Found Milvus DB at {milvus_db_path}")
              # Use the same embedding model as ingestion
@@ -295,6 +295,16 @@ async def chat_endpoint(request: ChatRequest, client_id: str = Depends(SimpleRat
         if request.jurisdiction and request.jurisdiction != "All":
             request.message = f"[Jurisdiction Context: {request.jurisdiction}] {request.message}"
             
+        # --- MEMORY CACHE LOOKUP (DEQUE) ---
+        for item in state.memory_cache:
+            if item["query"] == request.message:
+                logger.info("⚡ In-Memory Cache Hit")
+                return ChatResponse(
+                    response=item["response"]["response"],
+                    sources=item["response"].get("sources", []),
+                    cached=True
+                )
+
         # --- SEMANTIC CACHE LOOKUP (FAISS) ---
         if state.semantic_cache_store:
             # We use a tight L2 threshold for "very similar" matches against the persistent FAISS index
@@ -365,7 +375,16 @@ async def chat_endpoint(request: ChatRequest, client_id: str = Depends(SimpleRat
         
         response_obj = ChatResponse(response=final_message, sources=sources, cached=False)
         
-        # --- UPDATE CACHE (FAISS) ---
+        # --- UPDATE CACHES ---
+        # Update deque
+        state.memory_cache.append({
+            "query": request.message,
+            "response": {
+                "response": final_message,
+                "sources": sources
+            }
+        })
+
         if state.semantic_cache_store:
             cache_meta = {
                 "response": json.dumps({
@@ -383,6 +402,31 @@ async def chat_endpoint(request: ChatRequest, client_id: str = Depends(SimpleRat
         
         return response_obj
         
+    except Exception as e:
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict_endpoint(request: PredictionRequest, client_id: str = Depends(SimpleRateLimiter(limit=30, window=60))):
+    try:
+        from outcome_predictor import OutcomePredictor
+        from core_agent import get_predictor
+        predictor = get_predictor()
+        
+        # Prepare features for prediction
+        features = {
+            "description": request.description,
+            "court": request.court or "Unknown",
+            "judge": request.judge or "Unknown",
+            "case_type": request.case_type or "Unknown"
+        }
+        
+        result = predictor.predict(features, model_version=request.model_version)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+            
+        return PredictionResponse(result=result)
     except Exception as e:
         import traceback
         logger.error(traceback.format_exc())

@@ -4,44 +4,6 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 
-const MOCK_RESULTS = {
-    analytics: {
-        winRate: 65,
-        avgDuration: "14 months",
-        judgeTendency: "Strict",
-        outcomes: [
-            { name: 'Allowance', value: 65, color: '#4F46E5' }, // Indigo
-            { name: 'Dismissal', value: 25, color: '#E11D48' }, // Rose
-            { name: 'Settlement', value: 10, color: '#94A3B8' }, // Slate
-        ]
-    },
-    cases: [
-        {
-            id: 1,
-            name: "Mehta v. Union of India",
-            year: 2024,
-            court: "Delhi High Court",
-            match: 94,
-            outcome: "Allowance",
-            factSimilarity: "High",
-            legalSimilarity: "High",
-            tags: ["Bail", "Medical Grounds", "PMLA"],
-            reason: "The court heavily weighed the medical documentation provided by the defense, establishing a strong precedent that age and specific medical conditions override standard PMLA bail restrictions."
-        },
-        {
-            id: 2,
-            name: "Suresh Trading vs State of Maharashtra",
-            year: 2023,
-            court: "Supreme Court",
-            match: 88,
-            outcome: "Dismissal",
-            factSimilarity: "Medium",
-            legalSimilarity: "High",
-            tags: ["Bail", "Economic Offense", "Flight Risk"],
-            reason: "While the medical grounds were similar, the court dismissed the application due to a lack of corroborating chronologies and the applicant being deemed a severe flight risk."
-        }
-    ]
-};
 
 const LEGAL_SECTIONS = [
     "Section 138 NI Act",

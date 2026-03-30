@@ -49,8 +49,8 @@ class BERTFeatureExtractor:
                 try:
                     self.model = SentenceTransformer('all-MiniLM-L6-v2')
                     self.embedding_dim = 384
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Fallback model failed: {e}")
     
     def get_text_embedding(self, text: str) -> np.ndarray:
         """

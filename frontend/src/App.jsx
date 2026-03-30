@@ -6,9 +6,24 @@ import Dashboard from './components/Dashboard';
 import PDFUploader from './components/PDFUploader';
 import Chronology from './components/Chronology';
 import LandingPage from './components/LandingPage';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ChatHistoryProvider } from './context/ChatHistoryContext';
+import AuthModal from './components/AuthModal';
 
-function App() {
+function AppContent() {
   const [activeTab, setActiveTab] = useState('landing');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingTab, setPendingTab] = useState(null);
+  const { user, isAuthenticated, login, logout } = useAuth();
+
+  const handleTabClick = (tabId) => {
+    if (tabId !== 'landing' && !isAuthenticated) {
+      setPendingTab(tabId);
+      setShowAuthModal(true);
+    } else {
+      setActiveTab(tabId);
+    }
+  };
 
   const tabs = [
     { id: 'chat', label: 'Research Assistant', icon: MessageSquare },
@@ -18,7 +33,31 @@ function App() {
   ];
 
   if (activeTab === 'landing') {
-    return <LandingPage onGetStarted={() => setActiveTab('chat')} />;
+    return (
+      <>
+        <LandingPage onGetStarted={() => handleTabClick('chat')} />
+        <AnimatePresence>
+          {showAuthModal && (
+            <AuthModal 
+              onClose={() => {
+                setShowAuthModal(false);
+                setPendingTab(null);
+              }}
+              onAuthSuccess={(userData) => {
+                login(userData);
+                setShowAuthModal(false);
+                if (pendingTab) {
+                  setActiveTab(pendingTab);
+                  setPendingTab(null);
+                } else {
+                  setActiveTab('chat');
+                }
+              }}
+            />
+          )}
+        </AnimatePresence>
+      </>
+    );
   }
 
   return (
@@ -44,7 +83,7 @@ function App() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabClick(tab.id)}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-300 relative group
                   ${isActive
                     ? 'bg-nyaya-bg border border-nyaya-border/50 text-nyaya-text shadow-sm'
@@ -62,7 +101,7 @@ function App() {
         </nav>
 
         <div className="p-5 border-t border-nyaya-border/50">
-          <div className="bg-nyaya-bg rounded-2xl p-4 text-[13px] text-nyaya-muted font-medium border border-nyaya-border/50 shadow-inner">
+          <div className="bg-nyaya-bg rounded-2xl p-4 text-[13px] text-nyaya-muted font-medium border border-nyaya-border/50 shadow-inner mb-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-nyaya-muted/80">System Status</span>
               <span className="flex items-center gap-1.5 text-emerald-600 font-bold text-[10px] uppercase tracking-widest bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200">
@@ -75,6 +114,30 @@ function App() {
               <span className="text-nyaya-text">Connected</span>
             </div>
           </div>
+
+          {isAuthenticated ? (
+            <div className="flex items-center justify-between bg-white rounded-xl p-3 border border-nyaya-border/50 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-nyaya-primary/10 text-nyaya-primary flex items-center justify-center font-bold text-[13px]">
+                  {user?.initials || 'U'}
+                </div>
+                <span className="text-[13px] font-bold text-nyaya-text truncate max-w-[100px]">{user?.name}</span>
+              </div>
+              <button 
+                onClick={logout}
+                className="text-xs font-bold text-nyaya-muted hover:text-red-500 transition-colors px-2 py-1 flex-shrink-0"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setShowAuthModal(true)}
+              className="w-full bg-nyaya-text hover:bg-nyaya-primary text-white font-bold py-3 rounded-xl transition-all shadow-glow text-[13px]"
+            >
+              Sign In
+            </button>
+          )}
         </div>
       </div>
 
@@ -104,8 +167,35 @@ function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      <AnimatePresence>
+        {showAuthModal && (
+          <AuthModal 
+            onClose={() => {
+              setShowAuthModal(false);
+              setPendingTab(null);
+            }}
+            onAuthSuccess={(userData) => {
+              login(userData);
+              setShowAuthModal(false);
+              if (pendingTab) {
+                setActiveTab(pendingTab);
+                setPendingTab(null);
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <ChatHistoryProvider>
+        <AppContent />
+      </ChatHistoryProvider>
+    </AuthProvider>
+  );
+}

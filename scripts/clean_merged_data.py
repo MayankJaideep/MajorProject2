@@ -49,7 +49,7 @@ def clean_and_merge():
     
     # Clean Outcomes
     full_df['outcome'] = full_df['outcome'].str.lower().str.strip()
-    valid_outcomes = ['allowed', 'dismissed', 'partly_allowed', 'settlement', 'petitioner_win', 'defendant_win'] # petitioner_win/defendant_win are likely from synthetic
+    # valid_outcomes = ['allowed', 'dismissed', 'partly_allowed', 'settlement', 'petitioner_win', 'defendant_win'] # petitioner_win/defendant_win are likely from synthetic
     # Normalize: map synthetic 'petitioner_win' -> 'allowed', 'defendant_win' -> 'dismissed' (rough equivalent for training stability)
     outcome_map = {
         'petitioner_win': 'allowed',

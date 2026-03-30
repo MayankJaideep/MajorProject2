@@ -7,9 +7,8 @@ import os
 import requests
 import pandas as pd
 import time
-import random
 from dotenv import load_dotenv
-from typing import Optional, Literal
+from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
@@ -132,8 +131,8 @@ def fetch_and_process():
         try:
             all_cases = pd.read_csv(OUTPUT_PATH).to_dict('records')
             print(f"📂 Loaded {len(all_cases)} existing cases.")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ Could not load existing dataset: {e}")
             
     headers = {"Authorization": f"Token {INDIAN_KANOON_API}"}
     
@@ -194,7 +193,7 @@ def fetch_and_process():
                             'lower_court_decision': 'unknown',
                             'petitioner_type': 'unknown',
                             'main_statute': 'unknown',
-                            'win_prob': 1.0 if heuristic_outcome in ['allowed', 'settled'] else 0.0
+                            'win_prob': 0.6 if heuristic_outcome in ['allowed', 'settled'] else 0.4
                         }
                         new_batch.append(record)
                         print(f"     ✅ [{label_source}] {title[:30]}... -> {heuristic_outcome}")

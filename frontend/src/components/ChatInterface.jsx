@@ -3,10 +3,16 @@ import { Send, Bot, User, Book, Loader2, Paperclip, FileText, CheckCircle2, Aler
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAuth } from '../context/AuthContext';
+import { useChatHistory } from '../context/ChatHistoryContext';
+import ChatHistoryPanel from './ChatHistoryPanel';
 
 const API_URL = 'http://localhost:8000';
 
 export default function ChatInterface() {
+    const { isAuthenticated } = useAuth();
+    const { saveSession, setCurrentSessionId, startNewSession, currentSessionId } = useChatHistory();
+
     const [messages, setMessages] = useState([
         { role: 'assistant', content: 'Hello! I am Lumina Copilot. How can I help you with your legal research today?', isSystem: false }
     ]);
@@ -24,6 +30,61 @@ export default function ChatInterface() {
     };
 
     useEffect(scrollToBottom, [messages]);
+
+    const activeSessionRef = useRef(currentSessionId);
+    const startNewSessionRef = useRef(startNewSession);
+    const setCurrentSessionIdRef = useRef(setCurrentSessionId);
+    useEffect(() => { startNewSessionRef.current = startNewSession; }, [startNewSession]);
+    useEffect(() => { setCurrentSessionIdRef.current = setCurrentSessionId; }, [setCurrentSessionId]);
+
+    useEffect(() => {
+      if (isAuthenticated && !activeSessionRef.current) {
+        const newId = startNewSessionRef.current();
+        activeSessionRef.current = newId;
+      }
+    }, [isAuthenticated]);
+
+    const saveSessionRef = useRef(saveSession);
+    useEffect(() => { saveSessionRef.current = saveSession; }, [saveSession]);
+
+    useEffect(() => {
+        if (!isAuthenticated || messages.length < 2) return;
+        console.log('[AUTOSAVE] triggered, messages:', messages.length, 'isAuthenticated:', isAuthenticated);
+        const timer = setTimeout(() => {
+            saveSessionRef.current(messages, activeSessionRef.current);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [messages, isAuthenticated]);
+
+    useEffect(() => {
+        const handleLoadSession = (e) => {
+            if (e.detail?.messages) {
+                setMessages(e.detail.messages);
+                if (e.detail.sessionId) {
+                    setCurrentSessionIdRef.current(e.detail.sessionId);
+                    activeSessionRef.current = e.detail.sessionId;
+                }
+                setTimeout(() => {
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+            }
+        };
+        const handleNewChat = () => {
+            setMessages([
+                { role: 'assistant', content: 'Hello! I am Lumina Copilot. How can I help you with your legal research today?', isSystem: false }
+            ]);
+            const newId = startNewSessionRef.current();
+            activeSessionRef.current = newId;
+        };
+
+        window.addEventListener('lumina:load-session', handleLoadSession);
+        window.addEventListener('lumina:new-chat', handleNewChat);
+
+        return () => {
+            window.removeEventListener('lumina:load-session', handleLoadSession);
+            window.removeEventListener('lumina:new-chat', handleNewChat);
+        };
+    }, []);
 
     const handleSend = async () => {
         if (!input.trim()) return;
@@ -100,8 +161,10 @@ export default function ChatInterface() {
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-7.5rem)] bg-nyaya-bg border border-nyaya-border overflow-hidden relative shadow-2xl rounded-2xl">
-            {/* Ambient Background Effect */}
+        <div className="flex flex-row overflow-hidden relative w-full h-[calc(100vh-7.5rem)] shadow-2xl rounded-2xl border border-nyaya-border bg-nyaya-bg">
+            <ChatHistoryPanel />
+            <div className="flex-1 flex flex-col relative overflow-hidden bg-nyaya-bg">
+                {/* Ambient Background Effect */}
             <div className="absolute inset-0 bg-nyaya-accent/5 blur-[100px] pointer-events-none rounded-full top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1/2 h-1/2 mix-blend-multiply opacity-20"></div>
 
             {/* Context & Settings Bar (Redesigned) */}
@@ -295,6 +358,7 @@ export default function ChatInterface() {
                     <span className="text-[11px] text-nyaya-muted/70 font-medium tracking-wide">
                         Lumina is an AI assistant. May produce inaccurate information. Verify all legal citations.
                     </span>
+                </div>
                 </div>
             </div>
         </div>

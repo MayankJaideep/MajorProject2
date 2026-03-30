@@ -95,7 +95,7 @@ def create_agent(vector_store, bm25_index=None, bm25_corpus=None):
         Provide a 'jurisdiction' like 'Delhi High Court' if the user asks for precedents from a specific court.
         """
         perf_monitor.start_timer()
-        print(f"DEBUG: Tool called with query: '{query}', jurisdiction: '{jurisdiction}'")
+        logger.debug(f"Tool called with query: '{query}', jurisdiction: '{jurisdiction}'")
         
         try:
             if not vector_store:
@@ -112,18 +112,6 @@ def create_agent(vector_store, bm25_index=None, bm25_corpus=None):
             if bm25_index and bm25_corpus:
                 try:
                     tokenized_query = query.lower().split()
-                    # Get top 20 from BM25
-                    bm25_top_n = bm25_index.get_top_n(tokenized_query, bm25_corpus, n=20)
-                    # Convert strings back to Documents (This assumes bm25_corpus mirrors vector_store content)
-                    # Note: Ideally bm25_corpus should be a list of Document objects, but rank_bm25 expects list of tokens.
-                    # We need a mapping. If passed purely as text list, we lose metadata.
-                    # Simplified strategy: If 'bm25_corpus' is just text, we skip metadata for this part or 
-                    # rely on FAISS results primarily if mapping is hard. 
-                    # Use 'dense_results' as the source of truth for objects if exact match found?
-                    # Better: Assume `bm25_corpus` is a list of Document objects wrapper or we handle it in `api.py`.
-                    # For now, let's look at `bm25_index`. If `bm25_corpus` is actually a list of Documents, 
-                    # we need to tokenize their page_content for the index but store the Doc. 
-                    # Here we assume `bm25_corpus` is the list of Documents.
                     sparse_results = bm25_index.get_top_n(tokenized_query, bm25_corpus, n=20)
                 except Exception as e:
                     print(f"⚠️ BM25 Search failed: {e}")
@@ -186,13 +174,12 @@ def create_agent(vector_store, bm25_index=None, bm25_corpus=None):
             return f"Error searching documents: {str(e)}"
 
     @tool
-    @lru_cache(maxsize=128)
     def search_indian_kanoon(query: str):
         """
         Searches the Indian Kanoon database for legal cases and statutes.
         """
         perf_monitor.start_timer()
-        print(f"DEBUG: Indian Kanoon Tool called with query: {query}")
+        logger.debug(f"Indian Kanoon Tool called with query: {query}")
         
         api_token = os.getenv("INDIAN_KANOON_API_TOKEN")
         if not api_token:
@@ -237,7 +224,7 @@ def create_agent(vector_store, bm25_index=None, bm25_corpus=None):
         Predicts the outcome of a legal case using Gradient Boosting model.
         """
         perf_monitor.start_timer()
-        print(f"DEBUG: Outcome Prediction Tool called with: {case_description}")
+        logger.debug(f"Outcome Prediction Tool called with: {case_description}")
         
         try:
             cache_key = f"features_{hash(case_description)}"
